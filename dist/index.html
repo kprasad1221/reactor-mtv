@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="A little music-video station you can direct. Pick a world, choose the music, imagine what happens next. A Pixel Rhythms Labs playground.">
+  <meta name="theme-color" content="#111111">
+  <title>Reactor MTV — Pixel Rhythms Labs</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="src/app.js"></script>
+</head>
+<body>
+<a class="skip" href="#director">Skip to scene controls</a>
+<div class="topline"><span class="lab"><i aria-hidden="true"></i> PIXEL RHYTHMS LABS</span><span>SMALL JAMS. BIG WORLDS.</span><span class="edition">EXPERIMENT 001 / DEMO</span></div>
+<main>
+  <header class="masthead">
+    <div class="station-mark" aria-label="Reactor MTV"><h1>REACTOR<span class="mtv">MTV<span class="underline" aria-hidden="true"></span></span></h1><div class="stripes" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div></div>
+    <div class="intro"><p>A little music-video<br>station <em>you can direct.</em></p><span>Pick a world. Set the mood. See where it goes.</span></div>
+  </header>
+  <div class="workbench">
+    <section class="viewer" aria-label="Music video player">
+      <div class="screen-top"><span><b class="yellow-dot"></b> <span id="screen-mode">REFERENCE IMAGE</span></span><span id="channel-id">CH 01 / DEEP OCEAN</span></div>
+      <div class="screen" id="screen">
+        <img id="reference" src="media/caustics.png" alt="Luminous blue pool beneath arches and golden branches in an underwater conservatory.">
+        <video id="video" playsinline preload="none" hidden aria-label="Original recorded example" controls></video>
+        <canvas id="signal" width="960" height="540" hidden aria-label="Synthetic moving test pattern"></canvas>
+        <div id="screen-caption" class="screen-caption"><span>DEEP OCEAN / 01</span><strong id="screen-title">Pool of light</strong><p id="screen-subtitle">Water leads. Architecture answers.</p></div>
+        <span id="media-badge" class="media-badge">STILL FRAME</span>
+        <div class="corner-tag" aria-hidden="true">R<span>TV</span></div>
+      </div>
+      <div class="transport">
+        <button id="play-example" class="play-button"><span aria-hidden="true">▶</span> Play recorded example</button>
+        <button id="stop-playback" class="quiet-button" disabled>Stop</button>
+        <button id="audio" class="audio-button" aria-pressed="false">Sound on</button>
+      </div>
+      <div class="now-playing">
+        <span class="micro-label">SOURCE</span>
+        <div><strong id="now-title">Reference image · Deep Ocean / Caustics</strong><p id="now-note">Your direction creates a new recipe. The example keeps its original picture and soundtrack.</p></div>
+      </div>
+      <div id="status" role="status" aria-live="polite"><span class="status-dot"></span><span id="status-text">Ready to play. No account or credits needed.</span></div>
+      <div id="visible-error" role="alert" hidden></div>
+      <section id="preview-summary" class="summary-card" hidden aria-label="Direction preview">
+        <div><span class="micro-label">YOUR NEXT SCENE</span><span class="small-tag">BRIEF ONLY</span></div>
+        <h2 id="summary-title"></h2><p id="summary-direction"></p><p class="summary-note">This image is a reference. A new video has not been generated.</p>
+      </section>
+      <details class="source-details"><summary>About this recorded example <span>↗</span></summary><div class="details-inner"><p id="source-description"></p><a id="source-link" target="_blank" rel="noopener noreferrer">Original video source ↗</a><details><summary>Original recording settings</summary><pre id="original-prompt"></pre></details><a id="save-original" download>Download original video ↓</a></div></details>
+    </section>
+    <section id="director" class="director" aria-labelledby="director-title">
+      <div class="director-heading"><div><span class="micro-label">YOU'RE THE DIRECTOR</span><h2 id="director-title">What's next?</h2></div><span class="spark" aria-hidden="true">✳</span></div>
+      <div class="field-group"><div class="field-heading"><span class="step">01</span><h3>Start with an image</h3></div>
+        <div class="presets" role="group" aria-label="Preset images"></div>
+        <label class="upload" for="image-upload"><span aria-hidden="true">＋</span> <span id="upload-label">Or bring your own image</span><span class="upload-arrow" aria-hidden="true">↗</span></label>
+        <input id="image-upload" type="file" accept="image/png,image/jpeg,image/webp" class="file-input">
+        <p id="image-hint" class="hint">PNG, JPG or WebP · stays on your device · up to 10 MB</p>
+      </div>
+      <div class="field-group"><div class="field-heading"><span class="step">02</span><label for="genre">Choose the music</label></div><select id="genre"></select><p class="hint" id="music-hint">A starting point for your new scene. Instrumental by default.</p></div>
+      <div class="field-group"><div class="field-heading"><span class="step">03</span><label for="direction">What should happen?</label></div><textarea id="direction" rows="5" maxlength="1800" spellcheck="true"></textarea><p class="hint">One clear gesture is a good place to start.</p><p id="override-note" class="override-note" hidden>Your MUSIC direction overrides the genre menu.</p></div>
+      <button id="preview" class="primary-button">Preview direction <span aria-hidden="true">↗</span></button>
+      <p class="free-note">FREE PLAYGROUND <span>·</span> NO GENERATION SPEND</p>
+      <details class="prompt-details"><summary>See the exact prompt <span>＋</span></summary><p class="hint">Add a new line beginning MUSIC: in your direction to override the genre.</p><pre id="composed-prompt"></pre><div class="button-row"><button id="copy-prompt">Copy prompt</button><button id="save-recipe">Save recipe ↓</button></div></details>
+    </section>
+  </div>
+  <section class="behind-scenes" aria-label="Debug and rehearsal">
+    <details id="debug">
+      <summary><span><i class="debug-symbol" aria-hidden="true">⌁</i> Inside the station <span class="debug-subtitle"> / diagnostics & rehearsal</span></span><span class="log-count" id="log-count">1 EVENT</span></summary>
+      <div class="debug-body">
+        <div class="rehearsal">
+          <div><h2>Rehearse the connection</h2><p>These are synthetic states and a test pattern, with an optional quiet tone. They never contact Reactor.</p></div>
+          <div class="mock-controls"><label for="scenario" class="micro-label">TEST SCENARIO</label><select id="scenario"><option value="success">Successful passage</option><option value="error">Generation error</option><option value="timeout">Timeout</option><option value="closure">Closure unconfirmed</option></select><div class="button-row"><button id="run-mock">Run simulation</button><button id="cancel-mock" disabled>Cancel test</button><button id="resolve-mock" hidden>Confirm mock closure</button></div></div>
+        </div>
+        <div class="capture-row"><div><h3>Try a local recording</h3><p>Play a recorded example, then record its picture and sound. Save the take before closing this page.</p></div><button id="record" disabled>Record example</button><a id="save-take" class="button-link" download="reactor-mtv-take.webm" hidden>Save take ↓</a></div>
+        <div class="log-heading"><span class="micro-label">EVENT LOG · SAFE FIELDS ONLY</span><div class="button-row"><button id="copy-log">Copy log</button><button id="download-log">Download ↓</button></div></div>
+        <ol id="events" aria-label="Diagnostic events"></ol>
+        <p class="hint">Prompt text, image filenames, keys, tokens and URLs are excluded. Creative recipes are exported separately.</p>
+        <div class="integration-status"><span>REACTOR <b>Not connected</b></span><span>PERSONAL KEYS <b>Not enabled</b></span><span>X BROADCAST <b>Not connected</b></span></div>
+      </div>
+    </details>
+  </section>
+  <footer><span class="footer-mark">P/R <span>AN EXPERIMENT BY KP / PIXEL RHYTHMS LABS</span></span><span>Made for a little play. <span aria-hidden="true">↗</span></span></footer>
+</main>
+<noscript>This station needs JavaScript for its controls. Your browser can still open the bundled video files.</noscript>
+</body>
+</html>

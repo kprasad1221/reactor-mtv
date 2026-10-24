@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+node_modules/
+*.log
+.DS_Store
+.openai/local-state.json
+*.zip
+test-results/

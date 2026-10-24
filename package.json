@@ -1,0 +1,9 @@
+{
+  "name": "reactor-mtv",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A little music-video station you can direct. Pixel Rhythms Labs demo.",
+  "scripts": { "dev": "node server.mjs", "test": "node --test tests/*.test.mjs" },
+  "engines": { "node": ">=22" }
+}
