@@ -7,3 +7,5 @@ node_modules/
 .openai/local-state.json
 *.zip
 test-results/
+dist/vendor/
+.openai/

@@ -1,9 +1,22 @@
 {
   "name": "reactor-mtv",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "A little music-video station you can direct. Pixel Rhythms Labs demo.",
-  "scripts": { "dev": "node server.mjs", "test": "node --test tests/*.test.mjs" },
-  "engines": { "node": ">=22" }
+  "description": "An experimental music-video channel director powered by Reactor H3.",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@reactor-team/js-sdk": "3.3.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
 }

@@ -1,72 +1,88 @@
 # Reactor MTV
 
-A little music-video station you can direct. Pick an image, choose the music, and give the next scene somewhere to go.
+An independent music-video experiment: choose a source image, change channels to select a directing style, and generate a short audiovisual take with Reactor H3 Omni.
 
-An early Pixel Rhythms Labs playground by KP. This is a separate project from the Jukebox.
+This repository contains the local application, the real Reactor integration, and a free browser-generated test signal. The six channels map to curated music and video direction. There is no prompt editor or prompt export workflow.
 
-## Run on your Windows laptop
+**Status:** local integration implemented; offline lifecycle/security tests pass. A credentialed H3 generation has **not yet been verified** for this release. Follow the live acceptance test below before describing this as a working public generation demo. The previously published static preview is not this local integration.
 
-Requires **Node 22 or newer**. The Node 24 installation used for the Jukebox works here. No npm package installation or API key is needed.
+## Run locally
 
-Download this repository with **Code → Download ZIP**, extract it, and put the project folder at **D:\Projects\reactor-mtv**. Make sure package.json is directly inside that folder.
+Requires Node.js 22 or newer (Node 24 recommended) and a current desktop Chrome or Edge browser.
 
-In PowerShell:
+```sh
+git clone https://github.com/kprasad1221/reactor-mtv.git
+cd reactor-mtv
+npm ci
+npm run dev
+```
 
-~~~powershell
-cd D:\Projects\reactor-mtv
-npm.cmd run dev
-~~~
+Open **http://127.0.0.1:8094**. `npm run dev` builds the pinned Reactor SDK bundle and starts the local server. On Windows PowerShell, use `npm.cmd ci` and `npm.cmd run dev` if PowerShell blocks `npm.ps1`.
 
-Open **http://127.0.0.1:8094**.
+For an existing checkout, pull the latest code before installing dependencies. If you have local changes, commit or stash them first.
 
-1. Press **Play recorded example** to watch and hear a Deep Ocean clip.
-2. Choose another image, a genre, and edit **What should happen?**
-3. Press **Preview direction** to see the composed brief. Expand **See the exact prompt** to copy it or save a recipe.
-4. Open **Inside the station** to rehearse success, failure, timeout, cancellation, and uncertain closure. These are explicitly synthetic tests.
-5. For a capture test, open that drawer first, play an example, then press **Record example** while it plays. Save the take after it finishes.
+```sh
+git pull --ff-only
+npm ci
+npm run dev
+```
 
-Stop the app with **Ctrl+C** in PowerShell. The demo has no paid session to terminate.
+Stop the server with **Ctrl+C**. A different port is supported with `npm run dev -- --port 8095`.
 
-macOS/Linux: run npm run dev in this folder. Optional alternative port: npm run dev -- --port 8095.
+## First: the free test
 
-## What works in v0.1.0
+Click **Play free test pattern**. Confirm a moving yellow marker, advancing time, and a quiet 440 Hz tone. The signal monitor should report displayed frames and an audio signal. Check Sound off/on, Stop, and channel switching.
 
-- Three actual Deep Ocean reference images with matched original recorded clips.
-- Local PNG/JPEG/WebP uploads, six genre directions, editable action, and deterministic VISUAL / MUSIC composition.
-- Explicit MUSIC: lines override the genre menu and disclose the override in the interface.
-- Recorded playback is labeled with its original recipe; changing a genre never relabels or remakes the old clip.
-- Local recipe exports, allowlisted diagnostic logs, mock lifecycle tests, and recording of existing media.
-- A lightweight local static server with byte-range video support. No third-party runtime dependencies.
+This test uses Canvas, Web Audio and a browser MediaStream. It makes **no Reactor request**, needs no credentials and does not test Reactor authentication or WebRTC connectivity.
 
-**This version is the no-spend demo.** It has no Reactor SDK, key input, token broker, paid generation route, or X broadcaster. The local version runs the same tested interface as the hosted demo.
+## Then: one real Reactor test
 
-## What comes next
+1. Choose a PNG, JPEG or WebP source image (under 10 MB and 25 megapixels).
+2. Select a music-video directing style. Keep the same source for a later comparison across channels.
+3. Open **Your Reactor API key**, enter your own `rk_…` key into the local application, and select **Use key locally**. This stores it in the local server's memory; it does not contact Reactor yet.
+4. Confirm the displayed credit-use checkbox and click **Generate with Reactor** once.
+5. Watch the stages: authorization, connection, source upload, generation, playback, closure. Success requires a new moving picture, generated audio, and **Session closed**. Account access and available credits are required.
+6. Replay or save the captured take. Changing to another channel does not generate automatically. A new take requires another explicit generation request.
 
-The next bounded increment is a protected local Omni adapter through this same interface. The proposed test is one 5.875-second clip, one active attempt, max_sessions: 1, and a provider-enforced 30-second session limit, with explicit termination and confirmed closure. These are implementation requirements, not a claim that this demo connects to Reactor.
+Each attempt requests one **5.875-second clip** from `reactor/fast-h3-omni`, with a **30-second maximum session duration**. Reactor bills session time, so connection and generation overhead can cost more than the clip duration alone. A timeout or failed generation may still consume credits. No generation is automatically retried. The deliberately short test may time out during a slow model startup; inspect the last stage before another attempt.
 
-An operator must deliberately approve a displayed paid test before it runs. No retries, automatic connections on reload, or fallback accounts. Personal-key web mode, continuation, and X delivery remain later work.
+If closure cannot be confirmed, generation stays blocked. Use **Retry session closure** and inspect the Reactor dashboard. Do not treat a disconnected player as evidence that billing stopped. See [Testing](docs/TESTING.md) for the acceptance checklist and troubleshooting.
 
-The existing Jukebox's JS SDK checkpoint was **3.1.0**, inspected at commit 2078d009140d733ae6cd71847f9bf64ba0039148. It is a reference for the next integration, not an installed dependency here.
+## Credentials and deployment
 
-## Files
+The default server binds only to `127.0.0.1`. Credentials are accepted only through the local API, guarded by exact Host/Origin checks, Fetch Metadata checks and a process-specific CSRF token. API keys are never returned by the API, written to app storage, placed in URLs, or included in diagnostics. The password input is cleared immediately after submission.
 
-| File | Purpose |
+The backend exchanges the key for a short-lived token limited to one H3 Omni session with a duration cap. It creates the session, owns its identifier and verifies termination. The browser receives only that scoped token. An independent server watchdog requests cleanup if the browser disappears. See [Security](docs/SECURITY.md) for limitations and the threat model.
+
+Alternatively, copy `.env.example` to `.env.local` and set `REACTOR_API_KEY` there. This optional method **does store a key on disk**. Environment files are ignored by Git and are not served. The local password form is the default if you prefer memory-only entry. An environment key is reloaded at server restart even if you selected Forget key during the previous run.
+
+**Do not expose this server through a tunnel or public reverse proxy.** Non-loopback preview mode disables the Reactor API. A public hosted service accepting personal credentials is outside this release: it needs authenticated, isolated user sessions and a separate deployment/security review. Public GitHub access does not mean public access to a running local server.
+
+## Development
+
+```sh
+npm test
+npm run build
+npm start
+```
+
+`npm test` uses a fake provider and SDK for contract, cancellation, credential-boundary and lifecycle tests. It never calls Reactor and must not be represented as live-generation evidence. `npm run build` bundles the exact SDK version from the lockfile; the generated vendor bundle is ignored by Git.
+
+| Location | Responsibility |
 | --- | --- |
-| dist/index.html, dist/style.css | Station layout and visual identity |
-| dist/src/core.js | Recipes, diagnostic allowlist, mock adapter |
-| dist/src/app.js | Player, local image selection, UI, capture |
-| dist/original-recipes.json | Original media metadata, public source links and SHA-256 hashes |
-| dist/media/ | Bundled original images and videos |
-| server.mjs | Local demo server; defaults to loopback port 8094 |
-| docs/INTEGRATION.md | Boundaries for the next live increment |
-| docs/VERIFICATION.md | What was tested and what remains unverified |
+| `dist/src/styles.js` | Stable channel keys, research references, music/video prompt mapping |
+| `dist/src/reactor-session.js` | One-attempt connection, upload, enqueue and playback lifecycle |
+| `src/session-broker.mjs` | Server-only key, token scope, session ownership and verified closure |
+| `server.mjs` | Loopback HTTP API, request protections and static delivery |
+| `dist/src/media.js` | Source preparation, free signal and local stream capture |
+| `dist/src/app.js` | Controls, observable stages and in-memory channel takes |
 
-Run offline checks with **npm test**.
+Read [Architecture](docs/ARCHITECTURE.md), [Design research](docs/DESIGN.md), [Security](docs/SECURITY.md), and [Testing](docs/TESTING.md).
 
-## Creative source
+## Scope
 
-The initial catalogue uses **Caustics**, **God rays**, and **Fog** from KP’s Deep Ocean study. The friendly station names are Pool of light, Light from above, and Violet afterhours. This is three performances of one world, not three unrelated worlds. Clean matched Aurora Porch and Midnight Drive packs remain to be recovered.
+Available: six directing styles; user-supplied source image; local picture/audio test; explicit one-take Reactor flow; Stop; bounded session handling; in-memory channel playback and browser recording where supported.
 
-Original videos were generated with MiniMax H3 Max Turbo through Krea. Selected duration: 5 seconds; containers are approximately 5.184 seconds, 1344 × 768 H.264 with AAC audio. Original workshop prompts are not included in the public bundle. New editable directions and genre choices are separately authored proposals.
+Not implemented: continuous live redirection within a running generation, uploaded song timing, automatic playlists, persistent media hosting, or a public multi-user credential service. Generated audio follows the selected music direction; precise rhythm, subject preservation, cuts and style fidelity require live evaluation. Captures are browser recordings of the received stream, not guaranteed frame-exact provider masters. Reloading clears source images and captured takes.
 
-The creative media belongs to KP / Pixel Rhythms Labs. Repository visibility does not confer a separate blanket media license. Reactor MTV is a working project name; the station graphics are original, not an official MTV identity.
+This is an independent experiment, not affiliated with MTV. Historical videos are research references; their footage and audio are not bundled.

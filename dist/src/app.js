@@ -1,263 +1,460 @@
-import {VERSION,PRESETS,GENRES,composeRecipe,diagnostic,MockAdapter} from './core.js';
-
-const $=id=>document.getElementById(id);
-const video=$('video'),image=$('reference'),canvas=$('signal');
-const events=[];const started=performance.now();
-let selected=PRESETS[0],customUrl=null,customEpoch=0,sourcePreset=null,originals=[];
-let muted=false,mediaEpoch=0,signalFrame=null,signalOscillator=null,audioContext=null,audioDestination=null,mediaAudio=null;
-let recorder=null,recordCanvas=null,recordFrame=null,captureStream=null,takeUrl=null,recordChunks=[];
-let mockLockRelease=null;
-const status=text=>{$('status-text').textContent=text;};
-const clearError=()=>{$('visible-error').hidden=true;$('visible-error').textContent='';};
-function error(text,code,mode='demo'){$('visible-error').hidden=false;$('visible-error').textContent=text;log('error',mode,{code});}
-function log(stage,mode='demo',extra={}){
-  const entry=diagnostic({stage,mode,elapsedMs:performance.now()-started,...extra});events.push(entry);
-  if(events.length>150)events.shift();renderLog();
+import { STYLES } from "./styles.js";
+import { ReactorAttempt } from "./reactor-session.js";
+import { prepareImage, testSignal, recordStream } from "./media.js";
+const $ = (id) => document.getElementById(id),
+  player = $("player");
+let config = null,
+  index = 0,
+  source = null,
+  sourceURL = null,
+  free = null,
+  attempt = null,
+  busy = false,
+  unknown = false,
+  recorder = null,
+  meter = null,
+  mediaTimer = null,
+  frames = 0,
+  audioDetected = false,
+  frameCallback = null;
+const takes = new Map();
+const stages = {
+  preflight: "Checking player",
+  authorizing: "Creating bounded session",
+  connecting: "Connecting to Reactor",
+  uploading: "Uploading source image",
+  generating: "Generating music + video",
+  playing: "Receiving generated take",
+  closing: "Closing Reactor session",
+  closed: "Session closed",
+  closure_unknown: "Session closure unconfirmed",
+};
+const errors = {
+  credentials_rejected:
+    "Reactor rejected this key. Check the key and account access.",
+  invalid_key: "Enter a Reactor API key beginning with rk_.",
+  key_required: "Set your Reactor key locally first.",
+  attempt_active:
+    "Another attempt is active in this local server. Stop it before starting again.",
+  attempt_cancelled: "Attempt cancelled.",
+  attempt_timeout:
+    "The bounded test timed out. Check the last stage before trying again.",
+  cancelled: "Attempt stopped.",
+  closure_unknown:
+    "Session closure is unconfirmed. New generation is blocked. Retry closure and check your Reactor dashboard.",
+  reactor_sdk_error:
+    "Reactor reported a connection or command error. Check account access and the last completed stage.",
+  command_refused:
+    "Reactor refused a model command. See the test guide before retrying.",
+  command_not_acknowledged:
+    "The model did not acknowledge the expected command.",
+  generation_failed: "Reactor reported a generation failure.",
+  generation_stopped: "Reactor stopped this generation.",
+  attempt_failed:
+    "The Reactor attempt failed. Check the last stage and your account.",
+  reactor_unavailable: "The local server could not reach Reactor.",
+  session_create_failed: "Reactor could not create the session.",
+  token_failed: "Reactor could not issue a session token.",
+  invalid_token_response: "Reactor returned an unexpected token response.",
+  invalid_session_response: "Reactor returned an unexpected session response.",
+};
+function feedback(text, error = false) {
+  $("feedback").textContent = text;
+  $("feedback").classList.toggle("error", error);
 }
-function renderLog(){
-  $('events').replaceChildren(...events.slice().reverse().map(e=>{
-    const row=document.createElement('li');
-    for(const [className,text] of [['event-time',(e.elapsedMs/1000).toFixed(1)+'s'],['event-mode',e.mode.toUpperCase()],['event-stage',e.stage.replaceAll('_',' ')+(e.code?' · '+e.code:'')]]){
-      const span=document.createElement('span');span.className=className;span.textContent=text;row.append(span);
-    }return row;
-  }));$('log-count').textContent=events.length+' EVENTS';
+function log(text) {
+  const li = document.createElement("li");
+  li.textContent = text;
+  $("events").append(li);
+  $("events").scrollTop = $("events").scrollHeight;
 }
-function recipe(){return composeRecipe({presetId:selected.id,genre:$('genre').value,direction:$('direction').value,custom:Boolean(customUrl)});}
-function updateRecipe(){
-  const r=recipe();$('composed-prompt').textContent=r.prompt;$('override-note').hidden=!r.musicOverride;
-  $('music-hint').textContent=r.musicOverride?'Your MUSIC section will be used instead of this genre.':'A starting point for your new scene. Instrumental by default.';
-  $('preview-summary').hidden=true;
-  if(sourcePreset&&!video.hidden)$('now-note').textContent='Recorded example · original '+sourcePreset.name+' picture and soundtrack. Your new direction is ready to preview.';
+function setStage(stage) {
+  $("status").textContent = stages[stage] || stage;
+  log(stages[stage] || stage);
 }
-function mediaMode(mode,title,note){
-  $('screen-mode').textContent=mode;$('now-title').textContent=title;$('now-note').textContent=note;
+function update() {
+  const locked = busy || unknown;
+  for (const id of ["style", "previous", "next", "source", "test", "consent"])
+    $(id).disabled = locked;
+  $("generate").disabled =
+    locked || !config?.configured || !source || !$("consent").checked;
+  $("stop").disabled = !attempt || !busy;
+  $("stop-test").disabled = !free;
+  $("key-form")
+    .querySelectorAll("input,button")
+    .forEach((el) => (el.disabled = locked));
+  $("retry-close").hidden = !unknown;
+  $("key-status").textContent = config?.configured ? "set locally" : "not set";
+  $("replay").disabled = busy || !takes.has(STYLES[index].id);
+  $("download").hidden = busy || !takes.has(STYLES[index].id);
+  if (takes.has(STYLES[index].id))
+    $("download").href = takes.get(STYLES[index].id).url;
 }
-function stopCapture(){
-  if(recorder?.state==='recording')recorder.stop();
-}
-function stopSignal(){
-  cancelAnimationFrame(signalFrame);signalFrame=null;
-  try{signalOscillator?.stop();}catch{}
-  signalOscillator=null;
-}
-function stopPlayback(){
-  mediaEpoch++;stopCapture();stopSignal();video.pause();video.hidden=true;canvas.hidden=true;
-  image.hidden=false;$('screen-caption').hidden=false;$('media-badge').textContent='STILL FRAME';
-  $('stop-playback').disabled=true;$('record').disabled=true;
-}
-function showStill(){
-  stopPlayback();sourcePreset=null;
-  image.src=customUrl||selected.image;
-  image.alt=customUrl?'Your locally selected reference image.':selected.visual;
-  $('screen-title').textContent=customUrl?'Your world, your direction.':selected.name;
-  $('screen-subtitle').textContent=customUrl?'Start with one idea. Give it somewhere to go.':selected.detail;
-  $('screen-caption').querySelector('span').textContent=customUrl?'LOCAL IMAGE / YOUR NEXT SCENE':'DEEP OCEAN / '+selected.number;
-  $('channel-id').textContent=customUrl?'CUSTOM / LOCAL IMAGE':'CH '+selected.number+' / DEEP OCEAN';
-  $('play-example').disabled=Boolean(customUrl)||mock.active||mock.unresolved;
-  $('play-example').innerHTML=customUrl?'No recorded example yet':'<span aria-hidden="true">▶</span> Play recorded example';
-  mediaMode('REFERENCE IMAGE',customUrl?'Your image · local preview':'Reference image · Deep Ocean / '+originalName(selected.id),customUrl?'This upload stays on your device. No generated result exists yet.':'Your direction creates a new recipe. The example keeps its original picture and soundtrack.');
-}
-function originalName(id){return {caustics:'Caustics',rays:'God rays',fog:'Fog'}[id]||id;}
-function updateOriginal(){
-  const original=originals.find(x=>x.id===selected.id);
-  $('source-description').textContent='Deep Ocean / '+originalName(selected.id)+' · original Krea H3 performance, about 5 seconds. Its progressive house / techno soundtrack stays unchanged when you edit the music menu.';
-  $('source-link').href=original?.originalVideo||selected.video;
-  $('original-prompt').textContent=original?original.model+'\nSelected duration: '+original.selectedSeconds+' seconds\n'+original.note:'Original recording metadata is loading.';
-  $('save-original').href=selected.video;$('save-original').download='deep-ocean-'+selected.id+'.mp4';
-}
-function choosePreset(preset){
-  if(mock.active||mock.unresolved)return;
-  customEpoch++;if(customUrl)URL.revokeObjectURL(customUrl);customUrl=null;
-  selected=preset;$('image-upload').value='';$('upload-label').textContent='Or bring your own image';
-  $('genre').value=preset.genre;$('direction').value=preset.direction;
-  for(const button of document.querySelectorAll('.preset'))button.setAttribute('aria-pressed',String(button.dataset.id===preset.id));
-  clearError();showStill();updateRecipe();updateOriginal();log('input_changed','demo',{assetId:preset.id});
-  status('Image selected. Edit the direction, or play its original example.');
-}
-async function activateAudio(){
-  const Context=window.AudioContext||window.webkitAudioContext;
-  if(!Context)return false;
-  if(!audioContext)audioContext=new Context();
-  if(audioContext.state!=='running')await audioContext.resume();
-  return audioContext.state==='running';
-}
-async function playExample(){
-  if(customUrl||mock.active||mock.unresolved)return;
-  clearError();stopPlayback();const epoch=mediaEpoch;sourcePreset=selected;
-  image.hidden=true;canvas.hidden=true;video.hidden=false;$('screen-caption').hidden=true;
-  $('media-badge').textContent='DEMO / RECORDED';$('stop-playback').disabled=false;
-  video.src=sourcePreset.video;video.muted=muted;video.loop=false;
-  mediaMode('RECORDED EXAMPLE','Recorded example · Deep Ocean / '+originalName(sourcePreset.id),'Original Krea H3 picture + soundtrack. This recording was not generated from your edits.');
-  log('playback_requested','recorded',{assetId:sourcePreset.id});status('Loading the original recorded example…');
-  if(audioContext)activateAudio().catch(()=>{});
-  try{
-    await video.play();if(epoch!==mediaEpoch)return;
-    $('record').disabled=false;
-    status('Playing recorded example. Edit a direction for what you would make next.');
-    if(!video.muted)log('audio_playing','recorded',{assetId:sourcePreset.id});
-    if('requestVideoFrameCallback' in video)video.requestVideoFrameCallback(()=>{if(epoch===mediaEpoch)log('first_frame','recorded',{assetId:sourcePreset.id});});
-    else log('first_frame','recorded',{assetId:sourcePreset.id});
-  }catch(e){
-    if(epoch!==mediaEpoch)return;
-    $('record').disabled=true;
-    if(e.name==='NotAllowedError'){error('Playback needs a tap. Use the video’s play control, or try Sound off and play again.','audio_blocked','recorded');log('audio_blocked','recorded');}
-    else error('The recorded clip could not play. Try again, or return to the reference image with Stop.','media_missing','recorded');
-    status('Playback needs attention. Your direction is safe.');
-  }
-}
-video.addEventListener('ended',()=>{
-  stopCapture();$('record').disabled=true;log('output_finished','recorded',{assetId:sourcePreset?.id});
-  status('Recorded example finished. Replay is free.');
-});
-video.addEventListener('error',()=>{
-  if(video.hidden)return;stopCapture();$('record').disabled=true;
-  error('The video file is unavailable or unsupported. Stop returns to your image; your direction is unchanged.','media_missing','recorded');
-});
-video.addEventListener('playing',()=>{if(!video.hidden&&!mock.active)$('record').disabled=false;});
-video.addEventListener('pause',()=>{if(!recorder||recorder.state!=='recording')$('record').disabled=true;});
-image.addEventListener('error',()=>error('The reference image could not load. Choose another preset or upload a PNG, JPG or WebP.','invalid_image'));
-
-async function loadImage(file){
-  if(!file)return;
-  const epoch=++customEpoch;
-  if(!['image/png','image/jpeg','image/webp'].includes(file.type)){error('Choose a PNG, JPG or WebP image.','invalid_image');$('image-upload').value='';return;}
-  if(file.size>10*1024*1024){error('That image is over 10 MB. Try a smaller copy.','image_too_large');$('image-upload').value='';return;}
-  const url=URL.createObjectURL(file),probe=new Image();
-  try{
-    probe.src=url;await probe.decode();
-    if(epoch!==customEpoch){URL.revokeObjectURL(url);return;}
-    if(probe.width*probe.height>40_000_000)throw Error('Too large');
-    if(customUrl)URL.revokeObjectURL(customUrl);customUrl=url;
-    $('upload-label').textContent='Replace your image';
-    document.querySelectorAll('.preset').forEach(b=>b.setAttribute('aria-pressed','false'));
-    clearError();showStill();updateRecipe();log('input_changed');
-    status('Your image is ready. It stays on this device.');
-  }catch{URL.revokeObjectURL(url);if(epoch===customEpoch){error('This image could not be decoded. Try a smaller PNG, JPG or WebP.','invalid_image');$('image-upload').value='';}}
-}
-function preview(){
-  if(mock.active||mock.unresolved)return;
-  clearError();showStill();const r=recipe();$('summary-title').textContent=(customUrl?'Your image':selected.name)+' / '+r.genreLabel;
-  $('summary-direction').textContent=r.direction||'One clear gesture, then a pause.';$('preview-summary').hidden=false;
-  status('Direction preview ready. No generation started.');log('preview_ready','demo',{assetId:customUrl?null:selected.id});
-  if(matchMedia('(max-width:800px)').matches)$('preview-summary').scrollIntoView({behavior:'auto',block:'center'});
-}
-function download(data,name,type='application/json'){
-  try{
-    const url=URL.createObjectURL(new Blob([data],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),15000);
-    log('exported');status('Download prepared. Your browser saves the file.');
-  }catch{error('The download could not be prepared. Try Copy instead.','export_failed');}
-}
-async function copy(text){try{await navigator.clipboard.writeText(text);status('Copied.');}catch{error('Clipboard access is unavailable. Use the download button instead.','export_failed');}}
-function exportedLog(){return JSON.stringify({application:'Reactor MTV',version:VERSION,mode:'demo',reactorSdk:'not-installed',reactorSessionRequests:0,events},null,2);}
-function drawSignal(t){
-  const ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height;
-  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const colors=['#eee9d9','#eceb49','#66e5e5','#46bb6f','#f85c9c','#ed5351','#4c65bb'];
-  colors.forEach((color,i)=>{ctx.fillStyle=color;ctx.fillRect(i*w/7,0,w/7+1,h);});
-  ctx.fillStyle='#111';ctx.fillRect(0,h*.67,w,h*.33);
-  ctx.fillStyle='#f2f0e5';ctx.font='bold 34px monospace';ctx.fillText('PICTURE + SOUND TEST',44,h*.8);
-  ctx.font='18px monospace';ctx.fillStyle='#a9b1a0';ctx.fillText('SYNTHETIC SIGNAL / NO REACTOR SESSION',44,h*.88);
-  ctx.beginPath();ctx.arc(reduced?w*.5:(.5+.32*Math.sin(t/1800))*w,h*.33,40,0,Math.PI*2);ctx.fillStyle='#111';ctx.fill();
-  signalFrame=requestAnimationFrame(drawSignal);
-}
-function startSignal(){
-  stopPlayback();image.hidden=true;video.hidden=true;canvas.hidden=false;$('screen-caption').hidden=true;
-  $('media-badge').textContent='SYNTHETIC TEST';mediaMode('SYNTHETIC SIGNAL','Synthetic picture + tone','Connection rehearsal only. This pattern is drawn locally, not generated from your direction.');
-  signalFrame=requestAnimationFrame(t=>{drawSignal(t);log('first_frame','synthetic');});
-  if(audioContext?.state==='running'&&!muted){
-    const gain=audioContext.createGain();gain.gain.value=.025;gain.connect(audioContext.destination);
-    signalOscillator=audioContext.createOscillator();signalOscillator.frequency.value=220;signalOscillator.connect(gain);signalOscillator.start();
-    log('audio_playing','synthetic');
-  }
-}
-function freezeInputs(frozen){
-  for(const el of document.querySelectorAll('.preset,#image-upload,#preview,#play-example,#genre,#direction'))el.disabled=frozen||el.id==='play-example'&&Boolean(customUrl);
-  $('run-mock').disabled=frozen;$('cancel-mock').disabled=!mock.active;$('resolve-mock').hidden=!mock.unresolved;
-}
-const mock=new MockAdapter(e=>{
-  events.push(e);if(events.length>150)events.shift();renderLog();
-  const messages={request_accepted:'Simulation: request accepted. No model session exists.',generating:'Simulation: preparing a passage…',clip_ready:'Simulation: clip ready; playback has not started.',playback_requested:'Simulation: playing a local test pattern.',closing:'Simulation: closing the mock attempt…',closed:'Simulation closed. No Reactor session was created.',error:'Simulated generation error. Closed without a retry.',timeout:'Simulated timeout. Closed without a retry.',closure_unknown:'Simulation: closure is unconfirmed. Another attempt is blocked.',duplicate_blocked:'Another simulation is active or its closure is unresolved.'};
-  if(messages[e.stage])status(messages[e.stage]);
-  if(e.stage==='request_accepted'){clearError();freezeInputs(true);}
-  if(e.stage==='playback_requested')startSignal();
-  if(e.stage==='error'||e.stage==='timeout'){$('visible-error').hidden=false;$('visible-error').textContent=e.stage==='error'?'Simulated failure: generation did not complete. This is a test; no credits were used.':'Simulated timeout: the result missed the limit. This is a test; no automatic retry follows.';}
-  if(e.stage==='closure_unknown'){
-    stopSignal();$('visible-error').hidden=false;$('visible-error').textContent='Synthetic cleanup failure. A new test is blocked until you click Confirm mock closure.';freezeInputs(true);
-  }
-  if(e.stage==='closed'){
-    showStill();freezeInputs(false);mockLockRelease?.();mockLockRelease=null;
-    if(events.slice(-5).some(x=>x.stage==='closure_confirmed'))clearError();
-  }
-});
-async function runMock(){
-  if(mock.active||mock.unresolved){log('duplicate_blocked','synthetic');return;}
-  stopPlayback();clearError();
-  activateAudio().catch(()=>log('audio_blocked','synthetic',{code:'audio_blocked'}));
-  if(navigator.locks){
-    await navigator.locks.request('reactor-mtv-mock',{ifAvailable:true},async lock=>{
-      if(!lock){status('A simulation is running in another tab. Finish that test first.');log('duplicate_blocked','synthetic');return;}
-      await new Promise(resolve=>{mockLockRelease=resolve;if(!mock.start($('scenario').value))resolve();});
+async function api(path, body) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Station-CSRF": config.csrf,
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok)
+    throw Object.assign(Error("Local API request failed."), {
+      code: data.error,
     });
-  }else mock.start($('scenario').value);
+  return data;
 }
-async function recordExample(){
-  if(recorder?.state==='recording'){stopCapture();return;}
-  if(video.hidden||video.paused||mock.active)return;
-  clearError();const epoch=mediaEpoch;
-  if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream){error('Recording is not supported in this browser. Download the original example instead.','recording_unavailable');return;}
-  try{
-    const audioReady=await activateAudio();if(epoch!==mediaEpoch||video.paused)return;
-    if(!audioReady)throw Error('Audio unavailable');
-    if(!mediaAudio){mediaAudio=audioContext.createMediaElementSource(video);mediaAudio.connect(audioContext.destination);audioDestination=audioContext.createMediaStreamDestination();mediaAudio.connect(audioDestination);}
-    recordCanvas=document.createElement('canvas');recordCanvas.width=video.videoWidth;recordCanvas.height=video.videoHeight;
-    const ctx=recordCanvas.getContext('2d');
-    const paint=()=>{ctx.drawImage(video,0,0,recordCanvas.width,recordCanvas.height);recordFrame=requestAnimationFrame(paint);};paint();
-    captureStream=new MediaStream([...recordCanvas.captureStream(24).getVideoTracks(),...audioDestination.stream.getAudioTracks().map(t=>t.clone())]);
-    const type=['video/webm;codecs=vp8,opus','video/webm','video/mp4'].find(x=>MediaRecorder.isTypeSupported(x));
-    if(!type)throw Error('Encoding unavailable');
-    recordChunks=[];recorder=new MediaRecorder(captureStream,{mimeType:type});
-    recorder.ondataavailable=e=>{if(e.data.size)recordChunks.push(e.data);};
-    recorder.onerror=()=>{log('capture_failed','recorded');error('Recording failed. The original example is still available to download.','recording_unavailable');stopCapture();};
-    recorder.onstop=()=>{
-      cancelAnimationFrame(recordFrame);captureStream?.getTracks().forEach(t=>t.stop());
-      $('record').textContent='Record example';$('record').disabled=video.paused||video.hidden;recorder=null;
-      const blob=new Blob(recordChunks,{type});recordChunks=[];
-      if(blob.size){
-        if(takeUrl)URL.revokeObjectURL(takeUrl);takeUrl=URL.createObjectURL(blob);$('save-take').href=takeUrl;$('save-take').download='reactor-mtv-take.'+(type.includes('mp4')?'mp4':'webm');$('save-take').hidden=false;
-        log('capture_saved','recorded',{bytes:blob.size});status('Your local take is ready. Save it before closing the page.');
-      }else{log('capture_failed','recorded');error('The recording was empty. Start recording while the example is playing.','recording_unavailable');}
+async function refresh() {
+  try {
+    const response = await fetch("/api/config");
+    if (!response.ok) throw Error();
+    config = await response.json();
+    $("local-controls").hidden = false;
+    $("local-notice").textContent =
+      "Local server connected. Generation uses your Reactor account.";
+    unknown = ["closure_unknown", "closing", "starting", "active"].includes(
+      config.state,
+    );
+  } catch {
+    $("local-controls").hidden = true;
+    $("local-notice").textContent =
+      "Run this repository locally to use Reactor. This preview only supports the free signal check.";
+  }
+  update();
+}
+function clearMedia() {
+  free?.stop();
+  free = null;
+  clearInterval(mediaTimer);
+  mediaTimer = null;
+  if (frameCallback !== null && player.cancelVideoFrameCallback)
+    player.cancelVideoFrameCallback(frameCallback);
+  frameCallback = null;
+  meter?.source.disconnect();
+  if (meter) void meter.context.close();
+  meter = null;
+  player.pause();
+  player.srcObject = null;
+  player.removeAttribute("src");
+  player.load();
+}
+function observe(stream, context) {
+  frames = 0;
+  audioDetected = false;
+  if (player.requestVideoFrameCallback) {
+    const frame = () => {
+      frames++;
+      frameCallback = player.requestVideoFrameCallback(frame);
     };
-    recorder.start(200);$('record').textContent='Stop recording';log('recording_started','recorded');status('Recording the original example locally. The recording ends when the clip ends.');
-  }catch{cancelAnimationFrame(recordFrame);captureStream?.getTracks().forEach(t=>t.stop());error('Recording could not start here. You can still download the original example.','recording_unavailable');log('capture_failed','recorded');}
+    frameCallback = player.requestVideoFrameCallback(frame);
+  }
+  if (context && stream.getAudioTracks().length) {
+    const input = context.createMediaStreamSource(stream),
+      analyser = context.createAnalyser();
+    input.connect(analyser);
+    meter = {
+      context,
+      source: input,
+      analyser,
+      data: new Float32Array(analyser.fftSize),
+    };
+  }
+  mediaTimer = setInterval(() => {
+    if (!player.requestVideoFrameCallback)
+      frames = player.getVideoPlaybackQuality?.().totalVideoFrames || 0;
+    if (meter) {
+      meter.analyser.getFloatTimeDomainData(meter.data);
+      audioDetected ||= meter.data.some((v) => Math.abs(v) > 0.0001);
+    }
+    $("media-status").textContent =
+      `${frames} displayed frames · audio ${audioDetected ? "signal detected" : "not detected yet"}`;
+  }, 200);
 }
-for(const preset of PRESETS){
-  const button=document.createElement('button');button.type='button';button.className='preset';button.dataset.id=preset.id;button.setAttribute('aria-label',preset.name);button.setAttribute('aria-pressed',String(preset===selected));
-  const thumb=document.createElement('img');thumb.src=preset.image;thumb.alt='';
-  const number=document.createElement('span');number.className='preset-num';number.textContent=preset.number;
-  const name=document.createElement('span');name.className='preset-name';name.textContent=preset.name;
-  button.append(thumb,number,name);button.addEventListener('click',()=>choosePreset(preset));document.querySelector('.presets').append(button);
+function showStream(stream, context) {
+  player.srcObject = stream;
+  $("ident").hidden = true;
+  observe(stream, context);
+  void player.play().catch(() => {
+    player.muted = true;
+    syncMute();
+    void player.play().catch(() => {});
+    feedback("Use the player controls to enable sound.");
+  });
 }
-for(const [value,genre] of Object.entries(GENRES)){const option=document.createElement('option');option.value=value;option.textContent=genre.name;$('genre').append(option);}
-$('genre').value=selected.genre;$('direction').value=selected.direction;
-$('genre').addEventListener('change',()=>{updateRecipe();log('input_changed');});
-$('direction').addEventListener('input',updateRecipe);
-$('image-upload').addEventListener('change',e=>loadImage(e.target.files?.[0]));
-$('preview').addEventListener('click',preview);
-$('play-example').addEventListener('click',playExample);
-$('stop-playback').addEventListener('click',()=>{showStill();status('Playback stopped. Your direction is ready.');});
-$('audio').addEventListener('click',()=>{
-  muted=!muted;video.muted=muted;$('audio').textContent=muted?'Sound off':'Sound on';$('audio').setAttribute('aria-pressed',String(muted));
-  if(muted&&signalOscillator){try{signalOscillator.stop();}catch{}signalOscillator=null;}
-  if(!muted&&audioContext)activateAudio().catch(()=>log('audio_blocked'));
+function syncMute() {
+  $("mute").textContent = player.muted ? "Sound off" : "Sound on";
+  $("mute").setAttribute("aria-pressed", String(player.muted));
+}
+function playTake() {
+  const take = takes.get(STYLES[index].id);
+  if (!take) return;
+  clearMedia();
+  player.src = take.url;
+  player.loop = true;
+  $("ident").hidden = true;
+  $("signal-label").textContent = "RECORDED TAKE";
+  $("media-status").textContent =
+    "Replaying a captured take · no Reactor session";
+  void player
+    .play()
+    .catch(() => feedback("Press play in the video to replay this take."));
+}
+function tune(next) {
+  if (busy || unknown) return;
+  clearMedia();
+  index = (next + STYLES.length) % STYLES.length;
+  const style = STYLES[index],
+    number = String(index + 1).padStart(2, "0");
+  $("style").value = style.id;
+  $("channel-number").textContent = number;
+  $("channel-label").textContent = "CH " + number;
+  $("style-title").textContent = style.name;
+  $("style-description").textContent = style.description;
+  $("reference").textContent = "REFERENCE / " + style.reference;
+  $("tuning").hidden = false;
+  setTimeout(() => ($("tuning").hidden = true), 180);
+  $("signal-label").textContent = "STANDBY";
+  $("status").textContent = "Standby";
+  $("ident").hidden = false;
+  $("consent").checked = false;
+  feedback(
+    source
+      ? "Source ready. Choose a direction and generate one take."
+      : "Choose a source image, or start with the free signal check.",
+  );
+  if (takes.has(style.id)) playTake();
+  else $("media-status").textContent = "No take on this channel yet";
+  update();
+}
+STYLES.forEach((style, i) => {
+  const option = document.createElement("option");
+  option.value = style.id;
+  option.textContent = String(i + 1).padStart(2, "0") + " / " + style.name;
+  $("style").append(option);
 });
-$('copy-prompt').addEventListener('click',()=>copy(recipe().prompt));
-$('save-recipe').addEventListener('click',()=>download(JSON.stringify(recipe(),null,2),'reactor-mtv-recipe.json'));
-$('copy-log').addEventListener('click',()=>copy(exportedLog()));
-$('download-log').addEventListener('click',()=>download(exportedLog(),'reactor-mtv-diagnostics.json'));
-$('run-mock').addEventListener('click',runMock);
-$('cancel-mock').addEventListener('click',()=>mock.cancel());
-$('resolve-mock').addEventListener('click',()=>mock.confirmMockClosure());
-$('record').addEventListener('click',recordExample);
-window.addEventListener('pagehide',()=>{mock.cancel();stopPlayback();mockLockRelease?.();if(customUrl)URL.revokeObjectURL(customUrl);if(takeUrl)URL.revokeObjectURL(takeUrl);audioContext?.close();});
-updateRecipe();updateOriginal();log('ready');
-fetch('original-recipes.json').then(r=>{if(!r.ok)throw Error('Unavailable');return r.json();}).then(data=>{originals=data;updateOriginal();}).catch(()=>{$('original-prompt').textContent='Recording metadata unavailable. The original video remains available above.';});
+$("style").onchange = () =>
+  tune(STYLES.findIndex((s) => s.id === $("style").value));
+$("previous").onclick = () => tune(index - 1);
+$("next").onclick = () => tune(index + 1);
+$("consent").onchange = update;
+$("mute").onclick = () => {
+  player.muted = !player.muted;
+  syncMute();
+};
+$("replay").onclick = playTake;
+let imageVersion = 0;
+$("source").onchange = async () => {
+  const version = ++imageVersion;
+  source = null;
+  update();
+  try {
+    const image = await prepareImage($("source").files[0]);
+    if (version !== imageVersion) return;
+    source = image;
+    if (sourceURL) URL.revokeObjectURL(sourceURL);
+    sourceURL = URL.createObjectURL(source);
+    $("source-preview").src = sourceURL;
+    $("source-preview").hidden = false;
+    $("source-label").textContent = "Source ready · choose another";
+    for (const take of takes.values()) URL.revokeObjectURL(take.url);
+    takes.clear();
+    tune(index);
+    feedback(
+      "Source ready. Pick a direction, then explicitly generate one take.",
+    );
+  } catch (error) {
+    feedback(error.message, true);
+    $("source-preview").hidden = true;
+    $("source-label").textContent = "＋ Choose a source image";
+  } finally {
+    update();
+  }
+};
+$("test").onclick = async () => {
+  clearMedia();
+  busy = true;
+  update();
+  $("events").replaceChildren();
+  let context;
+  try {
+    context = new AudioContext();
+    await context.resume();
+    free = await testSignal();
+    showStream(free.stream, context);
+    $("signal-label").textContent = "LOCAL TEST";
+    setStage("Free signal running");
+    feedback(
+      "Confirm moving bars and a quiet tone. This is a local media test, not a Reactor connection.",
+    );
+  } catch {
+    if (context) void context.close();
+    clearMedia();
+    feedback(
+      "Could not start the local signal. Use a current Chrome or Edge browser.",
+      true,
+    );
+  } finally {
+    busy = false;
+    update();
+  }
+};
+$("stop-test").onclick = () => {
+  clearMedia();
+  $("ident").hidden = false;
+  $("signal-label").textContent = "STANDBY";
+  setStage("Free signal stopped");
+  update();
+};
+$("key-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const field = $("api-key");
+  let key = field.value.trim();
+  field.value = "";
+  busy = true;
+  update();
+  try {
+    config = { ...config, ...(await api("/api/credentials", { key })) };
+    feedback(
+      "Key set in local server memory. No Reactor request has been made.",
+    );
+    $("credentials").open = false;
+  } catch (error) {
+    feedback(errors[error.code] || "Could not set the local key.", true);
+  } finally {
+    key = "";
+    busy = false;
+    update();
+  }
+};
+$("forget-key").onclick = async () => {
+  busy = true;
+  update();
+  try {
+    config = { ...config, ...(await api("/api/credentials", { key: "" })) };
+    $("api-key").value = "";
+    feedback("Key cleared from this local server.");
+  } catch {
+    feedback("Could not clear the key. Check the local server.", true);
+  } finally {
+    busy = false;
+    update();
+  }
+};
+$("generate").onclick = async () => {
+  if (
+    busy ||
+    unknown ||
+    !source ||
+    !config?.configured ||
+    !$("consent").checked
+  )
+    return;
+  clearMedia();
+  busy = true;
+  $("consent").checked = false;
+  $("events").replaceChildren();
+  $("ident").hidden = false;
+  $("signal-label").textContent = "REACTOR TEST";
+  let context,
+    completed = false;
+  try {
+    if (
+      !globalThis.RTCPeerConnection ||
+      !globalThis.MediaRecorder ||
+      !globalThis.WebAssembly
+    )
+      throw Error("unsupported");
+    context = new AudioContext();
+    await context.resume();
+    attempt = new ReactorAttempt({
+      api,
+      makeReactor: async (options) => {
+        const { Reactor } = await import("/vendor/reactor.js");
+        return new Reactor(options);
+      },
+      onStage: setStage,
+      onTracks: async (tracks) => {
+        const stream = new MediaStream(tracks);
+        showStream(stream, context);
+        recorder = recordStream(stream);
+      },
+    });
+    update();
+    const result = await attempt.run({
+      styleId: STYLES[index].id,
+      image: source,
+    });
+    completed = result.completed;
+    feedback(
+      frames > 0 && audioDetected
+        ? "Take received. Session closure confirmed. Replay or save it below the screen."
+        : "Session closed, but picture and sound have not both been verified. Review the recording and signal monitor.",
+      !(frames > 0 && audioDetected),
+    );
+  } catch (error) {
+    feedback(
+      errors[error.code] ||
+        "The test could not run. Check browser support, build output and the last stage.",
+      true,
+    );
+    log(errors[error.code] || "Test failed.");
+  } finally {
+    unknown = attempt?.closure === "closure_unknown";
+    if (unknown) config.attemptId = attempt.id;
+    const blob = await recorder?.stop();
+    recorder = null;
+    if (completed && frames > 0 && blob?.size) {
+      const id = STYLES[index].id;
+      const old = takes.get(id);
+      if (old) URL.revokeObjectURL(old.url);
+      takes.set(id, { url: URL.createObjectURL(blob) });
+      $("download").download =
+        `reactor-mtv-${id}.${blob.type.startsWith("video/mp4") ? "mp4" : "webm"}`;
+    }
+    clearMedia();
+    if (context && context.state !== "closed") void context.close();
+    attempt = null;
+    busy = false;
+    if (takes.has(STYLES[index].id)) playTake();
+    else $("ident").hidden = false;
+    update();
+  }
+};
+$("stop").onclick = () => {
+  attempt?.cancel();
+  feedback("Stopping the attempt and verifying session closure…");
+};
+$("retry-close").onclick = async () => {
+  busy = true;
+  update();
+  try {
+    const result = await api("/api/stop", { attemptId: config.attemptId });
+    unknown = result.state === "closure_unknown";
+    setStage(unknown ? "closure_unknown" : "closed");
+    feedback(
+      unknown ? errors.closure_unknown : "Session closure confirmed.",
+      unknown,
+    );
+  } catch {
+    feedback(errors.closure_unknown, true);
+  } finally {
+    busy = false;
+    update();
+  }
+};
+window.addEventListener("pagehide", () => {
+  if (attempt && config)
+    void fetch("/api/stop", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Station-CSRF": config.csrf,
+      },
+      body: JSON.stringify({ attemptId: attempt.id }),
+      keepalive: true,
+    }).catch(() => {});
+});
+tune(0);
+void refresh();
