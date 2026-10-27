@@ -7,6 +7,8 @@ function fixture({
   refuse = false,
   holdUpload,
   holdConnect,
+  uploadError,
+  invalidUpload = false,
   closure = "closed",
 } = {}) {
   const handlers = new Map(),
@@ -34,9 +36,11 @@ function fixture({
       emit("trackReceived", "main_video", { kind: "video" });
       if (!omitAudio) emit("trackReceived", "main_audio", { kind: "audio" });
     },
-    async uploadFile() {
+    async uploadFile(image, options) {
+      assert.equal(options.name, "source.png");
       if (holdUpload) await holdUpload;
-      return { upload_id: "file" };
+      if (uploadError) throw uploadError;
+      return invalidUpload ? {} : { uploadId: "file", mimeType: "image/png", size: image.size };
     },
     async disconnect() {
       status = "disconnected";
@@ -85,7 +89,7 @@ test("one source image and style prompt are enqueued; early events are not lost"
   const enqueue = f.commands.filter((c) => c.type === "enqueue");
   assert.equal(enqueue.length, 1);
   assert.equal(enqueue[0].data.seconds, 5.875);
-  assert.deepEqual(enqueue[0].data.reference_images, [{ upload_id: "file" }]);
+  assert.deepEqual(enqueue[0].data.reference_images, [{ uploadId: "file", mimeType: "image/png", size: input.image.size }]);
   assert.equal(
     f.commands.find((c) => c.type === "set_canvas").data.aspect,
     "4:3",
@@ -153,4 +157,71 @@ test("safe authorization errors survive the adapter without exposing provider te
       error.code === "credentials_rejected" &&
       !error.message.includes("private"),
   );
+});
+
+test("upload-only confirms the reference and closes without enqueue, play or canvas commands", async () => {
+  const f = fixture();
+  const stages = [], diagnostics = [];
+  f.attempt.onStage = stage => stages.push(stage);
+  f.attempt.onDiagnostic = text => diagnostics.push(text);
+  const result = await f.attempt.run({ ...input, uploadOnly: true });
+  assert.deepEqual(result, { uploaded: true, completed: false, closure: "closed" });
+  assert.deepEqual(f.commands.map(c => c.type), ["set_autoplay"]);
+  assert.ok(stages.includes("uploaded"));
+  assert.equal(stages.at(-1), "closed");
+  assert.match(diagnostics.join("\n"), /Upload confirmed/);
+  assert.equal(f.apiCalls.filter(c => c.path === "/api/attempt").length, 1);
+  assert.equal(f.apiCalls.at(-1).path, "/api/stop");
+});
+test("upload failure retains the failed stage and safe SDK fields after cleanup", async () => {
+  const f = fixture({ uploadError: Object.assign(Error("secret rk_PRIVATE https://storage.example/image?signature=SECRET"), {
+    code: "UNAUTHORIZED", operation: "uploadFile", status: 403,
+  }) });
+  await assert.rejects(f.attempt.run({ ...input, uploadOnly: true }), error => {
+    assert.equal(error.failedStage, "uploading");
+    assert.deepEqual(error.details, { sdkCode: "UNAUTHORIZED", httpStatus: 403, operation: "uploadFile" });
+    assert.ok(!JSON.stringify(error).includes("SECRET"));
+    assert.ok(!error.message.includes("PRIVATE"));
+    return true;
+  });
+  assert.equal(f.attempt.stage, "closed");
+  assert.ok(!f.commands.some(c => c.type === "enqueue"));
+});
+test("unknown SDK fields and provider messages are excluded from diagnostics", async () => {
+  const f = fixture({ uploadError: { code: "rk_PRIVATE", operation: "Bearer SECRET", status: "403", message: "secret" } });
+  await assert.rejects(f.attempt.run({ ...input, uploadOnly: true }), error => {
+    assert.deepEqual(error.details, {});
+    return true;
+  });
+});
+test("an incomplete upload response cannot pass the upload test", async () => {
+  const f = fixture({ invalidUpload: true });
+  await assert.rejects(f.attempt.run({ ...input, uploadOnly: true }), { code: "invalid_upload_response", failedStage: "uploading" });
+  assert.equal(f.attempt.closure, "closed");
+});
+test("upload-only timeout closes and cannot enqueue after a late upload", async () => {
+  const held = deferred();
+  const f = fixture({ holdUpload: held.promise });
+  await assert.rejects(f.attempt.run({ ...input, uploadOnly: true }), { code: "attempt_timeout", failedStage: "uploading" });
+  held.resolve();
+  await new Promise(r => setImmediate(r));
+  assert.ok(!f.commands.some(c => c.type === "enqueue"));
+  assert.equal(f.attempt.closure, "closed");
+});
+test("upload-only cancellation closes and cannot enqueue after a late upload", async () => {
+  const held = deferred();
+  const f = fixture({ holdUpload: held.promise });
+  const run = f.attempt.run({ ...input, uploadOnly: true });
+  const rejected = assert.rejects(run, { code: "cancelled", failedStage: "uploading" });
+  await new Promise(r => setImmediate(r));
+  f.attempt.cancel();
+  await rejected;
+  held.resolve();
+  await new Promise(r => setImmediate(r));
+  assert.ok(!f.commands.some(c => c.type === "enqueue"));
+  assert.equal(f.attempt.closure, "closed");
+});
+test("upload success with unknown closure is not reported as a passed test", async () => {
+  const f = fixture({ closure: "closure_unknown" });
+  await assert.rejects(f.attempt.run({ ...input, uploadOnly: true }), { code: "closure_unknown" });
 });

@@ -14,6 +14,18 @@ These tests incur no Reactor usage. They do not prove authentication, WebRTC con
 4. Toggle Sound off/on, stop, and change channels. Verify there is no remaining tone after stop or channel change.
 5. Confirm no Reactor token/session/upload requests in the browser network panel. The initial `/api/config` request is local configuration only.
 
+## Upload-only acceptance (before generation)
+
+Run locally, choose an image, set the local key and give one-attempt credit consent. Click **Test upload only**. This is a real session and may use credits; the existing 30-second session cap and 26-second client deadline remain.
+
+- Success requires an SDK upload reference with the expected PNG MIME type and byte count, followed by verified session closure. The screen should say **Upload succeeded**; no generated picture or sound is expected.
+- Failure must name the pre-cleanup stage and retain safe SDK code/status/operation when supplied. The monitor and **Copy test log** must not include keys, JWTs, raw provider messages or signed URLs.
+- Stop during upload, timeout and closure failure must still clean up or block further attempts. Neither mode automatically retries; upload-only must never enqueue or play.
+- The revised connect-src permits HTTPS signed-storage destinations while scripts remain same-origin. A policy failure is logged without the blocked URI. Network/CORS errors may still require browser inspection; copy the app's safe log first.
+- Reconcile closure in the provider dashboard. Upload success does not establish generation, source fidelity, music, capture or playback.
+
+Revision v0.2.1: 32 offline tests and the pinned SDK build pass, including upload-only success, invalid upload references, safe failure fields, timeout/cancellation without late enqueue and unknown closure. A headless Chromium check also passed source preparation, consent, upload-only success, safe failure logging, cleanup, HTTPS storage access under CSP and zero generation commands, using a fake provider and SDK. The layout was visually inspected. Credentialed upload remains pending; mocks do not establish it.
+
 ## Paid H3 acceptance
 
 Use an image you can recognize easily: a single subject with a distinctive silhouette and a clear setting. Do not use a pre-generated video as evidence. Run one attempt first; compare styles only after that succeeds and closes.

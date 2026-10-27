@@ -23,6 +23,7 @@ const stages = {
   authorizing: "Creating bounded session",
   connecting: "Connecting to Reactor",
   uploading: "Uploading source image",
+  uploaded: "Source image uploaded",
   generating: "Generating music + video",
   playing: "Receiving generated take",
   closing: "Closing Reactor session",
@@ -50,6 +51,7 @@ const errors = {
     "The model did not acknowledge the expected command.",
   generation_failed: "Reactor reported a generation failure.",
   generation_stopped: "Reactor stopped this generation.",
+  invalid_upload_response: "The SDK did not return the expected uploaded-image reference.",
   attempt_failed:
     "The Reactor attempt failed. Check the last stage and your account.",
   reactor_unavailable: "The local server could not reach Reactor.",
@@ -64,7 +66,7 @@ function feedback(text, error = false) {
 }
 function log(text) {
   const li = document.createElement("li");
-  li.textContent = text;
+  li.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
   $("events").append(li);
   $("events").scrollTop = $("events").scrollHeight;
 }
@@ -78,6 +80,7 @@ function update() {
     $(id).disabled = locked;
   $("generate").disabled =
     locked || !config?.configured || !source || !$("consent").checked;
+  $("upload-test").disabled = $("generate").disabled;
   $("stop").disabled = !attempt || !busy;
   $("stop-test").disabled = !free;
   $("key-form")
@@ -342,7 +345,30 @@ $("forget-key").onclick = async () => {
     update();
   }
 };
-$("generate").onclick = async () => {
+function describeFailure(error) {
+  const stage = error.failedStage ? `Failed at: ${stages[error.failedStage] || error.failedStage}. ` : "";
+  const detail = error.details || {};
+  const fields = [detail.sdkCode, detail.httpStatus && `HTTP ${detail.httpStatus}`, detail.operation].filter(Boolean);
+  const hint = detail.sdkCode === "NETWORK_ERROR"
+    ? " The browser could not complete the request; check the browser-policy log and network/CORS errors."
+    : "";
+  return stage + (errors[error.code] || "The test could not run. Check browser support and build output.") +
+    (fields.length ? ` [${fields.join(" · ")}]` : "") + hint;
+}
+// CSP events contain signed URLs: expose only a fixed diagnostic, never the URI.
+window.addEventListener("securitypolicyviolation", (event) => {
+  if (!attempt || !busy || event.effectiveDirective !== "connect-src") return;
+  log("Browser policy blocked a network connection (connect-src). Upload may not have reached storage. No URL recorded.");
+});
+$("copy-log").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($("events").innerText);
+    $("copy-log").textContent = "Log copied";
+  } catch {
+    feedback("Select the signal-monitor text and copy it manually.");
+  }
+};
+async function runAttempt(uploadOnly = false) {
   if (
     busy ||
     unknown ||
@@ -355,6 +381,8 @@ $("generate").onclick = async () => {
   busy = true;
   $("consent").checked = false;
   $("events").replaceChildren();
+  $("copy-log").textContent = "Copy test log";
+  log(uploadOnly ? "UPLOAD ONLY · no generation will be requested · 30-second session limit" : "GENERATE · one take · 30-second session limit");
   $("ident").hidden = false;
   $("signal-label").textContent = "REACTOR TEST";
   let context,
@@ -375,6 +403,7 @@ $("generate").onclick = async () => {
         return new Reactor(options);
       },
       onStage: setStage,
+      onDiagnostic: log,
       onTracks: async (tracks) => {
         const stream = new MediaStream(tracks);
         showStream(stream, context);
@@ -385,21 +414,22 @@ $("generate").onclick = async () => {
     const result = await attempt.run({
       styleId: STYLES[index].id,
       image: source,
+      uploadOnly,
     });
     completed = result.completed;
-    feedback(
+    if (uploadOnly) {
+      feedback("Upload succeeded. Session closure confirmed. No generation was requested.");
+      log("UPLOAD TEST PASSED · image uploaded · session closed · no enqueue");
+    } else feedback(
       frames > 0 && audioDetected
         ? "Take received. Session closure confirmed. Replay or save it below the screen."
         : "Session closed, but picture and sound have not both been verified. Review the recording and signal monitor.",
       !(frames > 0 && audioDetected),
     );
   } catch (error) {
-    feedback(
-      errors[error.code] ||
-        "The test could not run. Check browser support, build output and the last stage.",
-      true,
-    );
-    log(errors[error.code] || "Test failed.");
+    const message = describeFailure(error);
+    feedback(message, true);
+    log(message);
   } finally {
     unknown = attempt?.closure === "closure_unknown";
     if (unknown) config.attemptId = attempt.id;
@@ -421,7 +451,9 @@ $("generate").onclick = async () => {
     else $("ident").hidden = false;
     update();
   }
-};
+}
+$("generate").onclick = () => runAttempt(false);
+$("upload-test").onclick = () => runAttempt(true);
 $("stop").onclick = () => {
   attempt?.cancel();
   feedback("Stopping the attempt and verifying session closure…");

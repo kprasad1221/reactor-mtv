@@ -12,18 +12,37 @@ const brokerCodes = new Set([
 ]);
 
 export class AttemptError extends Error {
-  constructor(code) {
+  constructor(code, details = {}) {
     super(code);
     this.code = code;
+    this.details = details;
   }
 }
 
-// One session, one enqueue. No reconnection, retry, or speculative generation.
+// Keep provider text, signed URLs and credentials out of diagnostics.
+const sdkCodes = new Set([
+  "NETWORK_ERROR", "UNAUTHORIZED", "NOT_FOUND", "CONFLICT", "RATE_LIMITED",
+  "BAD_REQUEST", "SERVER_ERROR", "VERSION_MISMATCH", "DECODE_FAILED",
+  "INVALID_STATE", "SESSION_TERMINAL", "MESSAGE_TOO_LARGE", "TRANSPORT_ERROR",
+  "DISCONNECTED", "REQUEST_TIMEOUT", "ABORTED", "INTERNAL_ERROR",
+]);
+function sdkDetails(error) {
+  const details = {};
+  if (sdkCodes.has(error?.code)) details.sdkCode = error.code;
+  if (Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599)
+    details.httpStatus = error.status;
+  if (["connect", "uploadFile", "sendCommand"].includes(error?.operation))
+    details.operation = error.operation;
+  return details;
+}
+
+// One session, at most one enqueue. No reconnection, retry, or speculative generation.
 export class ReactorAttempt {
   constructor({
     api,
     makeReactor,
     onStage = () => {},
+    onDiagnostic = () => {},
     onTracks = async () => {},
     timeoutMs = 26000,
     drainMs = 350,
@@ -32,6 +51,7 @@ export class ReactorAttempt {
       api,
       makeReactor,
       onStage,
+      onDiagnostic,
       onTracks,
       timeoutMs,
       drainMs,
@@ -55,9 +75,9 @@ export class ReactorAttempt {
   check() {
     if (this.controller.signal.aborted) throw this.controller.signal.reason;
   }
-  fail(code) {
+  fail(code, details) {
     if (!this.controller.signal.aborted)
-      this.controller.abort(new AttemptError(code));
+      this.controller.abort(new AttemptError(code, details));
   }
   cancel() {
     this.fail("cancelled");
@@ -107,10 +127,11 @@ export class ReactorAttempt {
       throw new AttemptError("command_not_acknowledged");
     return reply;
   }
-  async run({ styleId, image }) {
+  async run({ styleId, image, uploadOnly = false }) {
     if (this.started) throw new AttemptError("attempt_already_used");
     styleFor(styleId);
     if (!image || !image.size) throw new AttemptError("image_required");
+    if (typeof uploadOnly !== "boolean") throw new AttemptError("invalid_mode");
     this.started = true;
     let timer,
       result,
@@ -132,7 +153,7 @@ export class ReactorAttempt {
         bindings.push([event, fn]);
       };
       bind("statusChanged", (status) => this.emit({ type: "status", status }));
-      bind("error", () => this.fail("reactor_sdk_error"));
+      bind("error", (error) => this.fail("reactor_sdk_error", sdkDetails(error)));
       bind("message", (msg) => {
         if (msg.type === "command_error") this.fail("command_refused");
         if (msg.type === "clip_failed") this.fail("generation_failed");
@@ -169,46 +190,60 @@ export class ReactorAttempt {
         { enabled: false },
         "autoplay_accepted",
       );
-      await this.command("set_canvas", { aspect: "4:3" }, "canvas_accepted");
+      if (!uploadOnly)
+        await this.command("set_canvas", { aspect: "4:3" }, "canvas_accepted");
       this.change("uploading");
+      this.onDiagnostic(`Sending source.png · ${image.size} bytes · image/png · SDK 3.3.0`);
       const reference = await this.guard(
         this.reactor.uploadFile(image, { name: "source.png" }),
       );
       this.check();
-      this.change("generating");
-      await this.command(
-        "enqueue",
-        {
-          prompt: attempt.prompt,
-          seconds: CLIP_SECONDS,
-          reference_images: [reference],
-        },
-        "clip_queued",
-      );
-      await this.waitFor(() =>
-        this.events.some((e) => e.type === "clip_generated"),
-      );
-      await this.waitFor(
-        () => this.tracks.has("main_video") && this.tracks.has("main_audio"),
-      );
-      await this.guard(this.onTracks([...this.tracks.values()]));
-      this.change("playing");
-      // play acknowledges without a reply; errors arrive through the SDK error event.
-      await this.command("play", {});
-      await this.waitFor(() =>
-        this.events.some((e) => e.type === "clip_finished"),
-      );
-      await this.guard(
-        new Promise((resolve) => setTimeout(resolve, this.drainMs)),
-      );
-      result = { completed: true };
+      if (!reference?.uploadId || reference.mimeType !== "image/png" || reference.size !== image.size)
+        throw new AttemptError("invalid_upload_response");
+      this.change("uploaded");
+      this.onDiagnostic(`Upload confirmed · ${reference.size} bytes · image/png`);
+      if (uploadOnly) {
+        result = { completed: false, uploaded: true };
+      } else {
+        this.change("generating");
+        await this.command(
+          "enqueue",
+          {
+            prompt: attempt.prompt,
+            seconds: CLIP_SECONDS,
+            reference_images: [reference],
+          },
+          "clip_queued",
+        );
+        await this.waitFor(() =>
+          this.events.some((e) => e.type === "clip_generated"),
+        );
+        await this.waitFor(
+          () => this.tracks.has("main_video") && this.tracks.has("main_audio"),
+        );
+        await this.guard(this.onTracks([...this.tracks.values()]));
+        this.change("playing");
+        // play acknowledges without a reply; errors arrive through the SDK error event.
+        await this.command("play", {});
+        await this.waitFor(() =>
+          this.events.some((e) => e.type === "clip_finished"),
+        );
+        await this.guard(
+          new Promise((resolve) => setTimeout(resolve, this.drainMs)),
+        );
+        result = { completed: true, uploaded: true };
+      }
     } catch (error) {
       failure =
         error instanceof AttemptError
           ? error
           : new AttemptError(
               brokerCodes.has(error?.code) ? error.code : "attempt_failed",
+              sdkDetails(error),
             );
+      this.failedStage = this.stage;
+      failure.failedStage = this.failedStage;
+      this.onDiagnostic(`Failure before cleanup · stage: ${this.failedStage} · ${failure.code}`);
     } finally {
       clearTimeout(timer);
       this.change("closing");
@@ -239,7 +274,7 @@ export class ReactorAttempt {
         closed.state === "closure_unknown" ? "closure_unknown" : "closed",
       );
       if (closed.state === "closure_unknown")
-        failure = new AttemptError("closure_unknown");
+        failure = Object.assign(new AttemptError("closure_unknown"), { failedStage: this.failedStage });
     }
     if (failure) throw failure;
     return { ...result, closure: this.closure };

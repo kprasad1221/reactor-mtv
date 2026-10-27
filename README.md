@@ -35,18 +35,26 @@ Click **Play free test pattern**. Confirm a moving yellow marker, advancing time
 
 This test uses Canvas, Web Audio and a browser MediaStream. It makes **no Reactor request**, needs no credentials and does not test Reactor authentication or WebRTC connectivity.
 
-## Then: one real Reactor test
+## Next: test the image upload only (v0.2.1)
+
+This isolates the stage where the previous MTV attempt stopped. It creates a real bounded session, uploads the prepared PNG, then closes the session. **It never sends enqueue or play.** It is not a free/offline check: connection and upload can use Reactor credits, with the same 30-second provider session limit and no automatic retry.
 
 1. Choose a PNG, JPEG or WebP source image (under 10 MB and 25 megapixels).
-2. Select a music-video directing style. Keep the same source for a later comparison across channels.
-3. Open **Your Reactor API key**, enter your own `rk_…` key into the local application, and select **Use key locally**. This stores it in the local server's memory; it does not contact Reactor yet.
-4. Confirm the displayed credit-use checkbox and click **Generate with Reactor** once.
-5. Watch the stages: authorization, connection, source upload, generation, playback, closure. Success requires a new moving picture, generated audio, and **Session closed**. Account access and available credits are required.
-6. Replay or save the captured take. Changing to another channel does not generate automatically. A new take requires another explicit generation request.
+2. Open **Your Reactor API key**, enter your own key into the local application, and select **Use key locally**. This stores it in local server memory without contacting Reactor.
+3. Read and select the credit-use checkbox, then click **Test upload only** once.
+4. Expect **Connecting to Reactor → Uploading source image → Source image uploaded → Closing Reactor session → Session closed**, followed by **Upload succeeded**. No generated picture or soundtrack is expected.
+5. If it fails, select **Copy test log** in the signal monitor and share that log. It retains the failing stage even after closure, plus an allowlisted SDK error code, HTTP status and operation when available. It omits raw SDK messages, credentials and signed storage URLs. Do not share a raw browser network export.
+6. Check the Reactor dashboard for the ended session before another attempt. **Stop Reactor** cancels an in-progress test; Ctrl+C stops the local server after cleanup.
 
-Each attempt requests one **5.875-second clip** from `reactor/fast-h3-omni`, with a **30-second maximum session duration**. Reactor bills session time, so connection and generation overhead can cost more than the clip duration alone. A timeout or failed generation may still consume credits. No generation is automatically retried. The deliberately short test may time out during a slow model startup; inspect the last stage before another attempt.
+The browser connection policy now permits HTTPS storage uploads. The old policy allowed only Reactor hosts, although the SDK obtains a signed URL and sends image bytes directly to object storage. This is a plausible cause of the earlier upload failure, not a credentialed diagnosis. A browser-policy rejection is now reported explicitly without recording its URL. The installed SDK 3.3.0 accepts the prepared PNG Blob with a name override; that input type is supported.
 
-If closure cannot be confirmed, generation stays blocked. Use **Retry session closure** and inspect the Reactor dashboard. Do not treat a disconnected player as evidence that billing stopped. See [Testing](docs/TESTING.md) for the acceptance checklist and troubleshooting.
+## Then: one real generation
+
+After a successful upload test, choose the directing style, select fresh credit consent and click **Generate with Reactor** once. Watch upload, generation, playback and closure. Success requires a new moving picture, generated audio and **Session closed**. Replay or save the captured take; changing channels never generates automatically.
+
+Each generation requests one **5.875-second clip** from `reactor/fast-h3-omni`, with a **30-second maximum session duration**. Reactor bills session time, so overhead can cost more than the clip duration alone. A timeout or failed attempt may still consume credits. The overall local deadline is 26 seconds after creation returns; a slow startup can exhaust it. No generation or upload is automatically retried.
+
+If closure cannot be confirmed, both test and generation stay blocked. Use **Retry session closure** and inspect the Reactor dashboard. A disconnected player is not evidence that billing stopped. See [Testing](docs/TESTING.md).
 
 ## Credentials and deployment
 

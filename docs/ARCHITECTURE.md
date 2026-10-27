@@ -18,6 +18,14 @@ Music genre, tempo and instrumentation are subordinate parts of a directing pres
 
 The client uses an overall 26-second deadline after session creation returns. Slow connection, upload or generation can exhaust that budget. Cleanup does not wait behind a stuck SDK operation. A late upload completion cannot enqueue another clip after cancellation.
 
+## Upload-only diagnostic
+
+Test upload only shares the bounded attempt and cleanup path. It disables autoplay, uploads the same prepared PNG and checks the returned public FileRef metadata. It then closes without canvas setup, enqueue, generation waits, track waits or play. It does not test image conditioning, generation or playback. Uploads still require a ready billable model session.
+
+The SDK's uploadFile(File | Blob, { name }) contract is supported in the pinned 3.3.0 package. File upload obtains a signed storage URL and PUTs bytes to object storage; connect-src permits HTTPS for that provider-selected host. Browser policy failures get a fixed log entry. Failure diagnostics preserve the pre-cleanup stage and allowlisted SDK code/operation/HTTP status, never raw messages or signed URLs. The visible log has timestamps and a copy action.
+
+References: [file uploads](https://docs.reactor.inc/concepts/file-uploads), [SDK source](https://github.com/reactor-team/reactor-client-sdks/blob/main/sdks/js/src/reactor.ts), and the locally installed 3.3.0 type declarations. No credentialed failure has been diagnosed by these source checks alone.
+
 ## Session ownership
 
 One local server process permits one attempt at a time, including across tabs. Attempt IDs prevent one attempt's automatic cleanup from closing a different attempt. Server shutdown and the watchdog operate on the broker's own active session.

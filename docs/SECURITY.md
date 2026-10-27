@@ -19,20 +19,20 @@ The local server contacts the fixed HTTPS Reactor API to mint a scoped JWT. The 
 - Mutation request bodies are limited to 4 KiB. The source image is uploaded directly through the SDK, not through this API.
 - Provider base URL, model, duration and prompt mapping are not user-supplied API parameters.
 - Static delivery is confined to `dist`; environment files, dot paths and parent traversal are rejected.
-- CSP restricts scripts to this origin and connections to this origin/Reactor domains. Framing, plugins and external forms are blocked. Responses are not cached.
+- CSP restricts scripts to this origin. Connections permit this origin, HTTPS destinations and Reactor WebSockets. HTTPS is needed because SDK uploads PUT image bytes to a provider-selected signed storage URL outside Reactor domains; this deliberately broadens only connect-src, not script-src. Framing, plugins and external forms are blocked. Responses are not cached.
 - Non-loopback preview startup disables all credential and generation endpoints.
 
 These protections address unsolicited web-origin requests and accidental key publication. They do not authenticate another local OS user or protect against a malicious extension, compromised dependency, local malware, developer tools access, or a reverse proxy that rewrites requests into a trusted local origin. Do not publish or tunnel this server.
 
 ## Cost and lifecycle controls
 
-Only an explicit Generate request may mint a token. One active lease spans tabs. Starting, cancelling, closing, and unknown-closure states block another paid attempt. Automatic cleanup is bound to the attempt ID; clients cannot supply a provider session ID or URL to delete arbitrary resources.
+Only an explicit Test upload only or Generate request with credit consent may mint a token. One active lease spans tabs. Starting, cancelling, closing, and unknown-closure states block another paid attempt. Automatic cleanup is bound to the attempt ID; clients cannot supply a provider session ID or URL to delete arbitrary resources.
 
 The client deadline, server watchdog, shutdown handler and provider token constraints are independent controls. No client or network mechanism can guarantee that a remote operation stopped when its response was lost. Closure is reported as confirmed only after Reactor returns a terminal session state. If verification fails, the UI remains blocked and tells the operator to check their Reactor dashboard. Restarting the process clears memory but does not itself prove a remote session ended.
 
 ## Source and result privacy
 
-The selected source is decoded and re-encoded locally to a metadata-free PNG, with a generic upload name. Only an explicit generation action sends it to Reactor. Reactor receives the prepared image and directing prompt and applies its own service/data policies. The local server receives neither image bytes nor result recordings.
+The selected source is decoded and re-encoded locally to a metadata-free PNG, with a generic upload name. Only an explicit upload test or generation action uploads it through Reactor. An upload test sends no directing prompt to the model. Generation sends the prepared image and directing prompt and applies its own service/data policies. The local server receives neither image bytes nor result recordings.
 
 Captured takes are browser memory objects until downloaded. They are not published to GitHub or a hosted gallery. The app does not request microphone or camera access.
 

@@ -130,11 +130,15 @@
           </details>
           <label class="consent"
             ><input id="consent" type="checkbox" /><span
-              >Use my Reactor credits for one 5.875-second take. The session has
-              a 30-second limit; connection and generation time can also be
-              billed.</span
+              >Use my Reactor credits for one session, limited to 30 seconds.
+              Test upload sends only the image; Generate requests a 5.875-second
+              take. Connection and upload time can also be billed.</span
             ></label
           >
+          <div class="button-row">
+            <button id="upload-test" disabled>Test upload only</button>
+          </div>
+          <p class="small">Connect → upload image → close. No music or video generation. This uses a Reactor session and may use credits.</p>
           <div class="button-row">
             <button class="primary" id="generate" disabled>
               Generate with Reactor ↗</button
@@ -151,6 +155,7 @@
           <span class="eyebrow">SIGNAL MONITOR</span
           ><strong id="status">Standby</strong
           ><span id="media-status">No video received</span>
+          <button id="copy-log">Copy test log</button>
         </div>
         <ol id="events" aria-label="Attempt stages">
           <li>Ready for a local test.</li>
@@ -161,7 +166,7 @@
       <span
         >AN INDEPENDENT MUSIC-VIDEO EXPERIMENT. NOT AFFILIATED WITH MTV.</span
       ><span
-        >Local test build · H3 generation requires your Reactor account</span
+        >Upload test v0.2.1 · Requires your Reactor account</span
       >
     </footer>
   </body>

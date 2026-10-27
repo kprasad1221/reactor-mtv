@@ -31,6 +31,10 @@ test("static app and configuration make zero provider calls and do not expose ke
         page.headers.get("content-security-policy"),
         /frame-ancestors 'none'/,
       );
+      const csp = page.headers.get("content-security-policy");
+      // Signed storage PUTs may use a host outside reactor.inc.
+      assert.match(csp, /connect-src 'self' https: wss:\/\/\*\.reactor\.inc;/);
+      assert.match(csp, /script-src 'self' 'wasm-unsafe-eval';/);
       const config = await (await fetch(origin + "/api/config")).json();
       assert.equal(config.configured, true);
       assert.ok(!JSON.stringify(config).includes(key));
